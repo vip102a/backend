@@ -33,7 +33,7 @@ app.post('/api/create-invoice', async (req, res) => {
       ]
     };
 
-    const resp = await fetch(`${TELEGRAM_API}/createInvoiceLink`, {
+    const resp = await fetch(`${TELEGRAM_API}/createStarInvoiceLink`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -136,3 +136,4 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Server listening on PORT =>', PORT));
+
