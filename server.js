@@ -24,7 +24,7 @@ app.post('/api/create-invoice', async (req, res) => {
       description,
       payload: payload || ('p' + Date.now()),
       currency: 'XTR',
-      prices: [{ label: 'Lucky Box', amount: price_stars }]
+      prices: [{ label: 'Lucky Box', amount: price_stars * 100 }]
     };
     const resp = await fetch(`${TELEGRAM_API}/createInvoiceLink`, {
       method:'POST',
@@ -86,3 +86,4 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=> console.log('Server listening on', PORT));
+
