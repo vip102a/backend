@@ -6,33 +6,50 @@ const cors = require('cors');
 
 const app = express();
 
+// Middlewares
 app.use(cors());
 app.use(bodyParser.json());
 
+// ========== BOT TOKEN ==========
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
-  console.error('❌ MISSING BOT_TOKEN env var!');
+  console.error('MISSING BOT_TOKEN env var!');
   process.exit(1);
 }
+
+// Không in full token để tránh lộ ra log
+console.log('Bot started. BOT_TOKEN prefix =', BOT_TOKEN.slice(0, 10) + '***');
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 
-// =======================================================
-// =============== CREATE INVOICE (TELEGRAM STARS) =======
-// =======================================================
+// ===================== HEALTH CHECK =====================
+app.get('/', (req, res) => {
+  res.send('Telegram Stars backend is running');
+});
+
+
+// ===================== CREATE INVOICE ==========================
 app.post('/api/create-invoice', async (req, res) => {
   try {
-    const { title, description, price_stars = 50, payload } = req.body;
+    const {
+      title = 'Lucky Box',
+      description = 'Mua 1 Lucky Box để nhận phần thưởng digital',
+      price_stars = 50,          // số sao, KHÔNG nhân 100
+      payload
+    } = req.body;
 
-    // ⭐ Telegram Stars: amount = stars * 100
     const body = {
       title,
       description,
       payload: payload || ('p' + Date.now()),
-      currency: 'XTR',
+      provider_token: '',        // Stars: để chuỗi rỗng
+      currency: 'XTR',           // tiền tệ là Telegram Stars
       prices: [
-        { label: title || "Item", amount: price_stars * 100 }
+        {
+          label: title || 'Lucky Box',
+          amount: price_stars     // 50 sao => amount: 50
+        }
       ]
     };
 
@@ -42,89 +59,92 @@ app.post('/api/create-invoice', async (req, res) => {
       body: JSON.stringify(body)
     });
 
-    const json = await resp.json();
+    const j = await resp.json();
 
-    console.log("== TELEGRAM RESPONSE createInvoiceLink ==", json);
+    // LOG FULL RESPONSE TỪ TELEGRAM
+    console.log('== TELEGRAM RESPONSE createInvoiceLink ==', j);
 
-    if (!json.ok) {
+    if (!j.ok) {
       return res.json({
         ok: false,
-        error: json.description || "Unknown",
-        raw_response: json
+        error: j.description || 'Unknown',
+        raw_response: j
       });
     }
 
     return res.json({
       ok: true,
-      invoiceLink: json.result
+      invoiceLink: j.result
     });
 
   } catch (e) {
-    console.error("❌ ERROR /api/create-invoice:", e);
+    console.error('ERROR /api/create-invoice:', e);
     return res.json({ ok: false, error: e.message });
   }
 });
 
 
-// =======================================================
-// ===================== DELIVER REWARD ==================
-// =======================================================
+// ======================= DELIVER REWARD ===========================
 app.post('/api/deliver', async (req, res) => {
   try {
     const { payload } = req.body;
 
-    console.log("Deliver reward for payload:", payload);
+    console.log('Deliver reward for payload:', payload);
 
-    const reward =
-      "LUCKY-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+    const rewardCode =
+      'LUCKY-' + Math.random().toString(36).slice(2, 10).toUpperCase();
 
     return res.json({
       ok: true,
-      reward
+      reward: rewardCode
     });
 
   } catch (e) {
-    console.error("❌ ERROR /api/deliver:", e);
+    console.error('ERROR /api/deliver:', e);
     return res.json({ ok: false, error: e.message });
   }
 });
 
 
-// =======================================================
-// ===================== WEBHOOK (OPTIONAL) ==============
-// =======================================================
+// =================== WEBHOOK (FUTURE USE) ==================
 app.post('/webhook', async (req, res) => {
   try {
     const upd = req.body;
-    console.log("== WEBHOOK RECEIVED ==", upd);
+    console.log('== WEBHOOK RECEIVED ==', JSON.stringify(upd, null, 2));
 
+    // Telegram yêu cầu trả 200 càng sớm càng tốt
     res.sendStatus(200);
 
-    // --- Pre-checkout (Stars) ---
+    // 1) Pre-checkout (bắt buộc approve)
     if (upd.pre_checkout_query) {
+      const id = upd.pre_checkout_query.id;
+
       await fetch(`${TELEGRAM_API}/answerPreCheckoutQuery`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pre_checkout_query_id: upd.pre_checkout_query.id,
+          pre_checkout_query_id: id,
           ok: true
         })
       });
 
-      console.log(">> PRE CHECKOUT ACCEPTED");
+      console.log('>> PRE CHECKOUT ACCEPTED:', id);
       return;
     }
 
-    // --- Successful payment ---
-    if (upd.message?.successful_payment) {
+    // 2) Thanh toán thành công
+    if (upd.message && upd.message.successful_payment) {
+      const payment = upd.message.successful_payment;
+      console.log('>> PAYMENT SUCCESS:', payment);
+
       const chatId = upd.message.chat.id;
 
       await fetch(`${TELEGRAM_API}/sendMessage`, {
-        method: "POST",
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: "Thanh toán thành công! 🎉 Bạn sẽ nhận phần thưởng ngay."
+          text: 'Thanh toán thành công! Bạn sẽ nhận phần thưởng ngay trong Mini App.'
         })
       });
 
@@ -132,15 +152,11 @@ app.post('/webhook', async (req, res) => {
     }
 
   } catch (e) {
-    console.error("❌ ERROR WEBHOOK:", e);
+    console.error('ERROR WEBHOOK:', e);
   }
 });
 
 
-// =======================================================
-// ====================== START SERVER ====================
-// =======================================================
+// =================== START SERVER ==================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`🚀 Server listening on PORT => ${PORT}`)
-);
+app.listen(PORT, () => console.log('Server listening on PORT =>', PORT));
