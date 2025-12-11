@@ -18,6 +18,13 @@ const TELEGRAM_API = BOT_TOKEN
   ? `https://api.telegram.org/bot${BOT_TOKEN}`
   : null;
 
+// 👉 THÊM: URL 2 mini app (có thể chỉnh lại nếu sau này đổi domain)
+const LUCKY_URL   = process.env.LUCKY_URL   || 'https://frontend-sigma-plum-47.vercel.app/';
+const SHOOTER_URL = process.env.SHOOTER_URL || 'https://shooter-miniapp.vercel.app/';
+
+console.log('LUCKY_URL   =', LUCKY_URL);
+console.log('SHOOTER_URL =', SHOOTER_URL);
+
 // ================== HEALTH CHECK ==================
 app.get('/', (req, res) => {
   res.send('Telegram Stars backend is running');
@@ -107,7 +114,7 @@ app.post('/api/deliver', async (req, res) => {
   }
 });
 
-// ================== WEBHOOK (bắt buộc cho payment) ==================
+// ================== WEBHOOK ==================
 app.post('/webhook', async (req, res) => {
   try {
     const upd = req.body;
@@ -156,6 +163,51 @@ app.post('/webhook', async (req, res) => {
       // Ở đây bạn có thể lưu payment vào DB, v.v.
       return;
     }
+
+    // 3) Xử lý /start -> gửi menu 2 mini app
+    if (upd.message && upd.message.text) {
+      const chatId = upd.message.chat.id;
+      const text = (upd.message.text || '').trim();
+
+      if (text === '/start' || text.toLowerCase() === 'start') {
+        const menuText =
+          'Chào bạn! Hãy chọn mini app muốn mở:\n\n' +
+          '🎁 Lucky Box – Mở hộp quà nhận phần thưởng digital.\n' +
+          '🔫 Survival Shooter – Game bắn súng sinh tồn, dùng Stars mua Gold & nâng cấp vũ khí.';
+
+        const replyMarkup = {
+          inline_keyboard: [
+            [
+              {
+                text: '🎁 Lucky Box',
+                web_app: { url: LUCKY_URL }
+              }
+            ],
+            [
+              {
+                text: '🔫 Survival Shooter',
+                web_app: { url: SHOOTER_URL }
+              }
+            ]
+          ]
+        };
+
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: menuText,
+            reply_markup: replyMarkup
+          })
+        });
+
+        console.log('>> SENT START MENU to chat', chatId);
+        return;
+      }
+    }
+
+    // các loại update khác: bỏ qua
 
   } catch (e) {
     console.error('ERROR /webhook:', e);
