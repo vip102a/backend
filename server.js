@@ -18,19 +18,23 @@ const TELEGRAM_API = BOT_TOKEN
   ? `https://api.telegram.org/bot${BOT_TOKEN}`
   : null;
 
-// 👉 THÊM: URL 2 mini app (có thể chỉnh lại nếu sau này đổi domain)
+// 👉 URL 2 mini app (có thể chỉnh lại nếu sau này đổi domain)
 const LUCKY_URL   = process.env.LUCKY_URL   || 'https://frontend-sigma-plum-47.vercel.app/';
 const SHOOTER_URL = process.env.SHOOTER_URL || 'https://shooter-miniapp.vercel.app/';
 
 console.log('LUCKY_URL   =', LUCKY_URL);
 console.log('SHOOTER_URL =', SHOOTER_URL);
 
+// 👉 Map lưu Gold đang chờ claim cho từng user Telegram
+// key = userId (string), value = số Gold chờ
+const pendingGold = new Map();
+
 // ================== HEALTH CHECK ==================
 app.get('/', (req, res) => {
   res.send('Telegram Stars backend is running');
 });
 
-// ================== CREATE INVOICE ==================
+// ================== CREATE INVOICE (dùng chung cho Lucky & Game Shop) ==================
 app.post('/api/create-invoice', async (req, res) => {
   try {
     if (!BOT_TOKEN || !TELEGRAM_API) {
@@ -52,7 +56,7 @@ app.post('/api/create-invoice', async (req, res) => {
       return res.json({ ok: false, error: 'Giá Stars không hợp lệ.' });
     }
 
-    // CHÚ Ý: KHÔNG gửi provider_token với Stars (theo changelog Telegram)
+    // KHÔNG gửi provider_token với Stars
     const body = {
       title,
       description,
@@ -94,7 +98,7 @@ app.post('/api/create-invoice', async (req, res) => {
   }
 });
 
-// ================== DELIVER REWARD (giản lược) ==================
+// ================== DELIVER REWARD (demo cũ, để nguyên) ==================
 app.post('/api/deliver', async (req, res) => {
   try {
     const { payload } = req.body;
@@ -103,7 +107,6 @@ app.post('/api/deliver', async (req, res) => {
     const rewardCode =
       'LUCKY-' + Math.random().toString(36).slice(2, 10).toUpperCase();
 
-    // Ở bản đơn giản: tin tưởng status "paid" từ openInvoice hoặc webhook
     return res.json({
       ok: true,
       reward: rewardCode
@@ -114,13 +117,35 @@ app.post('/api/deliver', async (req, res) => {
   }
 });
 
+// ================== API CLAIM GOLD CHO GAME SURVIVAL ==================
+app.post('/api/claim-gold', (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    if (!userId) {
+      return res.json({ ok: false, error: 'Missing userId' });
+    }
+    const key = String(userId);
+    const amount = pendingGold.get(key) || 0;
+
+    if (amount > 0) {
+      pendingGold.delete(key);
+    }
+
+    console.log(`User ${key} claim gold = ${amount}`);
+    return res.json({ ok: true, bonusGold: amount });
+  } catch (e) {
+    console.error('ERROR /api/claim-gold:', e);
+    return res.json({ ok: false, error: e.message });
+  }
+});
+
 // ================== WEBHOOK ==================
 app.post('/webhook', async (req, res) => {
   try {
     const upd = req.body;
     console.log('== WEBHOOK RECEIVED ==', JSON.stringify(upd, null, 2));
 
-    // Trả 200 ngay
+    // Trả 200 ngay cho Telegram
     res.sendStatus(200);
 
     if (!BOT_TOKEN || !TELEGRAM_API) return;
@@ -143,24 +168,76 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // 2) Payment thành công (telegram gửi successful_payment)
+    // 2) Payment thành công (Telegram gửi successful_payment)
     if (upd.message && upd.message.successful_payment) {
       const payment = upd.message.successful_payment;
-      console.log('>> PAYMENT SUCCESS (via webhook):', payment);
-
       const chatId = upd.message.chat.id;
+      const fromUser = upd.message.from;
+      const fromId = fromUser && fromUser.id;
+      const payload = payment.invoice_payload || '';
+      const totalStars = payment.total_amount || 0;
 
-      // Thông báo cho user (tuỳ thích)
+      console.log('>> PAYMENT SUCCESS (via webhook): payload =', payload, 'totalStars =', totalStars);
+
+      // Nếu payload bắt đầu bằng "gold-pack-" => đây là mua Gold trong shop của game
+      // Game đã tự cộng Gold bằng openInvoice callback → ở webhook chỉ nhắn thông báo nhẹ.
+      if (payload.startsWith('gold-pack-')) {
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: 'Thanh toán Stars cho gói Gold trong Survival Shooter thành công. Gold đã được cộng trực tiếp trong game.'
+          })
+        });
+        return;
+      }
+
+      // Còn lại: coi như đây là lượt quay Lucky Box
+      // 1 sao = 10 Gold, Lucky Box = 50⭐ (500 Gold "giá trị") nhưng thưởng random:
+      // 20%: 0 Gold
+      // 50%: 300 Gold
+      // 20%: 500 Gold
+      // 10%: 1000 Gold
+      let bonusGold = 0;
+      const r = Math.random();
+      if (r < 0.20) {
+        bonusGold = 0;
+      } else if (r < 0.70) {
+        bonusGold = 300;
+      } else if (r < 0.90) {
+        bonusGold = 500;
+      } else {
+        bonusGold = 1000;
+      }
+
+      let msgText = '';
+      if (bonusGold > 0 && fromId) {
+        const key = String(fromId);
+        const old = pendingGold.get(key) || 0;
+        const now = old + bonusGold;
+        pendingGold.set(key, now);
+
+        msgText =
+          '🎁 Kết quả Lucky Box:\n' +
+          `• Bạn nhận được +${bonusGold} Gold để dùng trong game Survival Shooter.\n` +
+          `• Tổng Gold đang chờ trong game: ${now}.\n\n` +
+          'Hãy mở mini app 🔫 Survival Shooter để nhận Gold vào tài khoản game.';
+      } else {
+        msgText =
+          '🎁 Kết quả Lucky Box:\n' +
+          'Chúc bạn may mắn lần sau! Lần này bạn không nhận được Gold nào.';
+      }
+
       await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: 'Thanh toán Stars thành công! Bạn sẽ nhận phần thưởng trong Mini App.'
+          text: msgText
         })
       });
 
-      // Ở đây bạn có thể lưu payment vào DB, v.v.
       return;
     }
 
@@ -172,7 +249,7 @@ app.post('/webhook', async (req, res) => {
       if (text === '/start' || text.toLowerCase() === 'start') {
         const menuText =
           'Chào bạn! Hãy chọn mini app muốn mở:\n\n' +
-          '🎁 Lucky Box – Mở hộp quà nhận phần thưởng digital.\n' +
+          '🎁 Lucky Box – Mở hộp quà nhận Gold dùng cho game.\n' +
           '🔫 Survival Shooter – Game bắn súng sinh tồn, dùng Stars mua Gold & nâng cấp vũ khí.';
 
         const replyMarkup = {
